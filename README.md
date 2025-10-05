@@ -1,7 +1,7 @@
 # Mediator.CQRS
 
 [![NuGet](https://img.shields.io/nuget/v/Mediator.CQRS.svg)](https://www.nuget.org/packages/Mediator.CQRS/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A lightweight, high-performance mediator pattern implementation for CQRS-style request/response handling with pipeline behavior support.
 
