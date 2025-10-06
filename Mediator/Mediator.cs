@@ -6,7 +6,7 @@ internal sealed class Mediator(IServiceProvider serviceProvider) : IMediator
 {
     public async Task<TResponse> SendAsync<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
+        if (request == null) throw new ArgumentNullException(nameof(request));
 
         var requestType = request.GetType();
         var responseType = typeof(TResponse);

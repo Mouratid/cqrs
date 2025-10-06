@@ -13,8 +13,8 @@ public static class DependencyInjection
     /// <returns>The service collection for chaining.</returns>
     public static IServiceCollection AddMediator(this IServiceCollection services, params Assembly[] assemblies)
     {
-        ArgumentNullException.ThrowIfNull(services);
-        ArgumentNullException.ThrowIfNull(assemblies);
+        if (services == null) throw new ArgumentNullException(nameof(services));
+        if (assemblies == null) throw new ArgumentNullException(nameof(assemblies));
 
         // Register mediator as scoped to align with typical handler lifetime
         services.AddScoped<IMediator, Mediator>();
