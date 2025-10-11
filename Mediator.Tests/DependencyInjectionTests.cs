@@ -1,6 +1,4 @@
-using System.Reflection;
-using FluentAssertions;
-using Mediator;
+using Mediator.Tests.TestHelpers;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Mediator.Tests;
@@ -8,150 +6,309 @@ namespace Mediator.Tests;
 public class DependencyInjectionTests
 {
     [Fact]
-    public void AddMediator_ShouldRegisterMediatorAsScoped()
+    public void AddMediator_RegistersMediatorAsScoped()
     {
         // Arrange
         var services = new ServiceCollection();
 
         // Act
-        services.AddMediator();
+        services.AddMediator(typeof(DependencyInjectionTests).Assembly);
 
         // Assert
-        var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(IMediator));
-        descriptor.Should().NotBeNull();
-        descriptor!.Lifetime.Should().Be(ServiceLifetime.Scoped);
-        descriptor.ImplementationType.Should().Be(typeof(global::Mediator.Mediator));
+        var serviceDescriptor = services.FirstOrDefault(s => s.ServiceType == typeof(IMediator));
+        Assert.NotNull(serviceDescriptor);
+        Assert.Equal(ServiceLifetime.Scoped, serviceDescriptor.Lifetime);
+        Assert.Equal(typeof(Mediator), serviceDescriptor.ImplementationType);
     }
 
     [Fact]
-    public void AddMediator_WithoutAssemblies_ShouldUseCallingAssembly()
+    public void AddMediator_WithNoAssemblies_ThrowsArgumentException()
     {
         // Arrange
         var services = new ServiceCollection();
 
-        // Act
-        services.AddMediator();
-        var serviceProvider = services.BuildServiceProvider();
-
-        // Assert - IMediator should be registered
-        var mediator = serviceProvider.GetService<IMediator>();
-        mediator.Should().NotBeNull();
+        // Act & Assert
+        var exception = Assert.Throws<ArgumentException>(() => services.AddMediator());
+        Assert.Equal("At least one assembly must be provided. (Parameter 'assemblies')", exception.Message);
+        Assert.Equal("assemblies", exception.ParamName);
     }
 
     [Fact]
-    public void AddMediator_WithAssembly_ShouldRegisterHandlersFromAssembly()
+    public void AddMediator_WithSpecificAssemblies_ScansThoseAssemblies()
     {
         // Arrange
         var services = new ServiceCollection();
-        var assembly = Assembly.GetExecutingAssembly();
+        var testAssembly = typeof(TestQueryHandler).Assembly;
 
         // Act
-        services.AddMediator(assembly);
-
-        // Assert - Handlers should be registered
-        var handlerDescriptor = services.FirstOrDefault(d =>
-            d.ServiceType == typeof(IRequestHandler<SampleQuery, SampleResponse>));
-        handlerDescriptor.Should().NotBeNull();
-        handlerDescriptor!.Lifetime.Should().Be(ServiceLifetime.Scoped);
-    }
-
-    [Fact]
-    public void AddMediator_WithAssembly_ShouldRegisterBehaviorsFromAssembly()
-    {
-        // Arrange
-        var services = new ServiceCollection();
-        var assembly = Assembly.GetExecutingAssembly();
-
-        // Act
-        services.AddMediator(assembly);
-
-        // Assert - Behaviors should be registered
-        var behaviorDescriptor = services.FirstOrDefault(d =>
-            d.ServiceType == typeof(IPipelineBehavior<SampleQuery, SampleResponse>));
-        behaviorDescriptor.Should().NotBeNull();
-        behaviorDescriptor!.Lifetime.Should().Be(ServiceLifetime.Scoped);
-    }
-
-    [Fact]
-    public void AddMediator_ShouldNotRegisterGenericTypeDefinitions()
-    {
-        // Arrange
-        var services = new ServiceCollection();
-        var assembly = Assembly.GetExecutingAssembly();
-
-        // Act
-        services.AddMediator(assembly);
-
-        // Assert - Generic type definitions should not be registered
-        var genericHandlerDescriptor = services.FirstOrDefault(d =>
-            d.ImplementationType?.IsGenericTypeDefinition == true);
-        genericHandlerDescriptor.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task AddMediator_IntegrationTest_ShouldWorkEndToEnd()
-    {
-        // Arrange
-        var services = new ServiceCollection();
-        services.AddMediator(Assembly.GetExecutingAssembly());
-        var serviceProvider = services.BuildServiceProvider();
-        var mediator = serviceProvider.GetRequiredService<IMediator>();
-        var query = new SampleQuery("Test");
-
-        // Act
-        var result = await mediator.SendAsync(query);
+        services.AddMediator(testAssembly);
 
         // Assert
-        result.Should().NotBeNull();
-        result.Data.Should().Be("Test");
-        result.WasHandled.Should().BeTrue();
+        using var serviceProvider = services.BuildServiceProvider();
+
+        // Verify handlers are registered
+        var queryHandler = serviceProvider.GetService<IRequestHandler<TestQuery, string>>();
+        var commandHandler = serviceProvider.GetService<IRequestHandler<TestCommand, Unit>>();
+
+        Assert.NotNull(queryHandler);
+        Assert.NotNull(commandHandler);
+        Assert.IsType<TestQueryHandler>(queryHandler);
+        Assert.IsType<TestCommandHandler>(commandHandler);
     }
 
     [Fact]
-    public void AddMediator_WithNullServices_ShouldThrowArgumentNullException()
-    {
-        // Arrange
-        IServiceCollection services = null!;
-
-        // Act
-        var act = () => services.AddMediator();
-
-        // Assert
-        act.Should().Throw<ArgumentNullException>();
-    }
-
-    [Fact]
-    public void AddMediator_WithNullAssemblies_ShouldThrowArgumentNullException()
+    public void AddMediator_RegistersAllHandlersFromAssembly()
     {
         // Arrange
         var services = new ServiceCollection();
-        Assembly[] assemblies = null!;
 
         // Act
-        var act = () => services.AddMediator(assemblies);
+        services.AddMediator(typeof(DependencyInjectionTests).Assembly);
 
         // Assert
-        act.Should().Throw<ArgumentNullException>();
+        using var serviceProvider = services.BuildServiceProvider();
+
+        var queryHandler = serviceProvider.GetService<IRequestHandler<TestQuery, string>>();
+        var commandHandler = serviceProvider.GetService<IRequestHandler<TestCommand, Unit>>();
+        var responseHandler = serviceProvider.GetService<IRequestHandler<TestRequestWithResponse, TestResponse>>();
+        var voidCommandHandler = serviceProvider.GetService<IRequestHandler<TestVoidCommand, Unit>>();
+
+        Assert.NotNull(queryHandler);
+        Assert.NotNull(commandHandler);
+        Assert.NotNull(responseHandler);
+        Assert.NotNull(voidCommandHandler);
     }
 
-    // Test fixtures
-    public record SampleQuery(string Data) : IRequest<SampleResponse>;
-
-    public record SampleResponse(string Data, bool WasHandled);
-
-    public class SampleQueryHandler : IRequestHandler<SampleQuery, SampleResponse>
+    [Fact]
+    public void AddMediator_RegistersPipelineBehaviors()
     {
-        public Task<SampleResponse> HandleAsync(SampleQuery request, CancellationToken cancellationToken)
+        // Arrange
+        var services = new ServiceCollection();
+
+        // Act
+        services.AddMediator(typeof(DependencyInjectionTests).Assembly);
+
+        // Assert
+        using var serviceProvider = services.BuildServiceProvider();
+
+        var loggingBehaviors = serviceProvider.GetServices<IPipelineBehavior<TestQuery, string>>();
+        Assert.NotEmpty(loggingBehaviors);
+
+        // Should contain concrete logging and validation behavior implementations
+        var behaviorTypes = loggingBehaviors.Select(b => b.GetType()).ToList();
+        Assert.Contains(typeof(TestQueryLoggingBehavior), behaviorTypes);
+        Assert.Contains(typeof(TestQueryValidationBehavior), behaviorTypes);
+    }
+
+    [Fact]
+    public void AddMediator_WithNullServices_ThrowsArgumentNullException()
+    {
+        // Act & Assert
+        Assert.Throws<ArgumentNullException>(() =>
+            DependencyInjection.AddMediator(null!, Array.Empty<Assembly>()));
+    }
+
+    [Fact]
+    public void AddMediator_WithNullAssemblies_ThrowsArgumentNullException()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+
+        // Act & Assert
+        Assert.Throws<ArgumentNullException>(() =>
+            services.AddMediator(null!));
+    }
+
+    [Fact]
+    public void AddMediator_RegistersHandlersAsScoped()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+
+        // Act
+        services.AddMediator(typeof(DependencyInjectionTests).Assembly);
+
+        // Assert
+        var handlerDescriptor = services.FirstOrDefault(s =>
+            s.ServiceType == typeof(IRequestHandler<TestQuery, string>));
+
+        Assert.NotNull(handlerDescriptor);
+        Assert.Equal(ServiceLifetime.Scoped, handlerDescriptor.Lifetime);
+        Assert.Equal(typeof(TestQueryHandler), handlerDescriptor.ImplementationType);
+    }
+
+    [Fact]
+    public void AddMediator_RegistersBehaviorsAsScoped()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+
+        // Act
+        services.AddMediator(typeof(DependencyInjectionTests).Assembly);
+
+        // Assert
+        var behaviorDescriptor = services.FirstOrDefault(s =>
+            s.ServiceType == typeof(IPipelineBehavior<TestQuery, string>) &&
+            s.ImplementationType == typeof(TestQueryLoggingBehavior));
+
+        Assert.NotNull(behaviorDescriptor);
+        Assert.Equal(ServiceLifetime.Scoped, behaviorDescriptor.Lifetime);
+    }
+
+    [Fact]
+    public void AddMediator_AllowsChaining()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+
+        // Act
+        var result = services.AddMediator(typeof(DependencyInjectionTests).Assembly);
+
+        // Assert
+        Assert.Same(services, result);
+    }
+
+    [Fact]
+    public void AddMediator_IgnoresAbstractClasses()
+    {
+        // This test verifies that abstract classes implementing IRequestHandler are not registered
+        // Arrange
+        var services = new ServiceCollection();
+
+        // Act
+        services.AddMediator(typeof(DependencyInjectionTests).Assembly);
+
+        // Assert
+        using var serviceProvider = services.BuildServiceProvider();
+
+        // All handlers should be concrete implementations
+        var allHandlers = services.Where(s =>
+            s.ServiceType.IsGenericType &&
+            s.ServiceType.GetGenericTypeDefinition() == typeof(IRequestHandler<,>));
+
+        foreach (var handler in allHandlers)
         {
-            return Task.FromResult(new SampleResponse(request.Data, true));
+            Assert.NotNull(handler.ImplementationType);
+            Assert.False(handler.ImplementationType.IsAbstract);
+            Assert.True(handler.ImplementationType.IsClass);
         }
     }
 
-    public class SampleBehavior : IPipelineBehavior<SampleQuery, SampleResponse>
+    [Fact]
+    public void AddMediator_IgnoresGenericTypeDefinitions()
     {
-        public async Task<SampleResponse> Handle(SampleQuery request, RequestHandler<SampleResponse> nextHandler, CancellationToken cancellationToken)
+        // This test verifies that open generic types are not registered
+        // Arrange
+        var services = new ServiceCollection();
+
+        // Act
+        services.AddMediator(typeof(DependencyInjectionTests).Assembly);
+
+        // Assert
+        var allHandlers = services.Where(s =>
+            s.ServiceType.IsGenericType &&
+            s.ServiceType.GetGenericTypeDefinition() == typeof(IRequestHandler<,>));
+
+        foreach (var handler in allHandlers)
         {
-            return await nextHandler();
+            Assert.NotNull(handler.ImplementationType);
+            Assert.False(handler.ImplementationType.IsGenericTypeDefinition);
+        }
+    }
+
+    [Fact]
+    public void AddMediator_IgnoresInterfacesAndStructs()
+    {
+        // This test verifies that interfaces and structs implementing IRequestHandler are not registered
+        // Arrange
+        var services = new ServiceCollection();
+
+        // Act
+        services.AddMediator(typeof(DependencyInjectionTests).Assembly);
+
+        // Assert
+        using var serviceProvider = services.BuildServiceProvider();
+
+        // Verify no services are registered for interface or struct implementations
+        var allHandlers = services.Where(s =>
+            s.ServiceType.IsGenericType &&
+            s.ServiceType.GetGenericTypeDefinition() == typeof(IRequestHandler<,>));
+
+        foreach (var handler in allHandlers)
+        {
+            Assert.NotNull(handler.ImplementationType);
+            Assert.True(handler.ImplementationType.IsClass);
+            Assert.False(handler.ImplementationType.IsInterface);
+            Assert.False(handler.ImplementationType.IsValueType); // Structs are value types
+        }
+    }
+
+    [Fact]
+    public void AddMediator_IgnoresBehaviorInterfacesAndStructs()
+    {
+        // This test verifies that interfaces and structs implementing IPipelineBehavior are not registered
+        // Arrange
+        var services = new ServiceCollection();
+
+        // Act
+        services.AddMediator(typeof(DependencyInjectionTests).Assembly);
+
+        // Assert
+        var allBehaviors = services.Where(s =>
+            s.ServiceType.IsGenericType &&
+            s.ServiceType.GetGenericTypeDefinition() == typeof(IPipelineBehavior<,>));
+
+        foreach (var behavior in allBehaviors)
+        {
+            Assert.NotNull(behavior.ImplementationType);
+            Assert.True(behavior.ImplementationType.IsClass);
+            Assert.False(behavior.ImplementationType.IsInterface);
+            Assert.False(behavior.ImplementationType.IsValueType); // Structs are value types
+        }
+    }
+
+    [Fact]
+    public void AddMediator_IgnoresAbstractBehaviors()
+    {
+        // This test verifies that abstract behaviors are not registered
+        // Arrange
+        var services = new ServiceCollection();
+
+        // Act
+        services.AddMediator(typeof(DependencyInjectionTests).Assembly);
+
+        // Assert
+        var allBehaviors = services.Where(s =>
+            s.ServiceType.IsGenericType &&
+            s.ServiceType.GetGenericTypeDefinition() == typeof(IPipelineBehavior<,>));
+
+        foreach (var behavior in allBehaviors)
+        {
+            Assert.NotNull(behavior.ImplementationType);
+            Assert.False(behavior.ImplementationType.IsAbstract);
+            Assert.True(behavior.ImplementationType.IsClass);
+        }
+    }
+
+    [Fact]
+    public void AddMediator_IgnoresBehaviorGenericTypeDefinitions()
+    {
+        // This test verifies that open generic behavior types are not registered
+        // Arrange
+        var services = new ServiceCollection();
+
+        // Act
+        services.AddMediator(typeof(DependencyInjectionTests).Assembly);
+
+        // Assert
+        var allBehaviors = services.Where(s =>
+            s.ServiceType.IsGenericType &&
+            s.ServiceType.GetGenericTypeDefinition() == typeof(IPipelineBehavior<,>));
+
+        foreach (var behavior in allBehaviors)
+        {
+            Assert.NotNull(behavior.ImplementationType);
+            Assert.False(behavior.ImplementationType.IsGenericTypeDefinition);
         }
     }
 }

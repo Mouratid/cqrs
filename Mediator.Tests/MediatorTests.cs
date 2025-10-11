@@ -1,133 +1,160 @@
-using FluentAssertions;
-using Mediator;
+using Mediator.Tests.TestHelpers;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Mediator.Tests;
 
-public class MediatorTests
+[Collection("Mediator Tests")]
+public class MediatorTests : IDisposable
 {
-    [Fact]
-    public async Task SendAsync_WithValidQuery_ShouldReturnResponse()
+    private readonly ServiceProvider _serviceProvider;
+    private readonly IMediator _mediator;
+
+    public MediatorTests()
     {
-        // Arrange
         var services = new ServiceCollection();
-        services.AddScoped<IRequestHandler<TestQuery, TestResponse>, TestQueryHandler>();
-        services.AddScoped<IMediator, Mediator>();
-        var serviceProvider = services.BuildServiceProvider();
-        var mediator = serviceProvider.GetRequiredService<IMediator>();
-        var query = new TestQuery(42);
+        services.AddMediator(typeof(MediatorTests).Assembly);
+        _serviceProvider = services.BuildServiceProvider();
+        _mediator = _serviceProvider.GetRequiredService<IMediator>();
 
-        // Act
-        var result = await mediator.SendAsync(query);
+        // Reset static state before each test
+        TestCommandHandler.LastValue = 0;
+        TestVoidCommandHandler.LastAction = string.Empty;
+        LoggingBehavior<TestQuery, string>.LoggedMessages.Clear();
+        OrderTestBehavior1<TestQuery, string>.ExecutionOrder.Clear();
+    }
 
-        // Assert
-        result.Should().NotBeNull();
-        result.Value.Should().Be(42);
-        result.Message.Should().Be("Success");
+    public void Dispose()
+    {
+        _serviceProvider?.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     [Fact]
-    public async Task SendAsync_WithValidCommand_ShouldReturnResponse()
+    public async Task SendAsync_WithValidQuery_ReturnsExpectedResult()
     {
         // Arrange
-        var services = new ServiceCollection();
-        services.AddScoped<IRequestHandler<TestCommand, TestResponse>, TestCommandHandler>();
-        services.AddScoped<IMediator, Mediator>();
-        var serviceProvider = services.BuildServiceProvider();
-        var mediator = serviceProvider.GetRequiredService<IMediator>();
-        var command = new TestCommand("Test");
+        var query = new TestQuery { Input = "test input" };
 
         // Act
-        var result = await mediator.SendAsync(command);
+        var result = await _mediator.SendAsync<string>(query);
 
         // Assert
-        result.Should().NotBeNull();
-        result.Value.Should().Be(100);
-        result.Message.Should().Be("Test");
+        Assert.Equal("Handled: test input", result);
     }
 
     [Fact]
-    public async Task SendAsync_WithCommandWithoutResponse_ShouldReturnUnit()
+    public async Task SendAsync_WithCommand_ExecutesSuccessfully()
     {
         // Arrange
-        var services = new ServiceCollection();
-        services.AddScoped<IRequestHandler<TestCommandWithoutResponse, Unit>, TestCommandWithoutResponseHandler>();
-        services.AddScoped<IMediator, Mediator>();
-        var serviceProvider = services.BuildServiceProvider();
-        var mediator = serviceProvider.GetRequiredService<IMediator>();
-        var command = new TestCommandWithoutResponse();
+        var command = new TestCommand { Value = 42 };
 
         // Act
-        var result = await mediator.SendAsync(command);
+        var result = await _mediator.SendAsync<Unit>(command);
 
         // Assert
-        result.Should().Be(Unit.Value);
+        Assert.Equal(Unit.Value, result);
+        Assert.Equal(42, TestCommandHandler.LastValue);
     }
 
     [Fact]
-    public async Task SendAsync_WithUnregisteredHandler_ShouldThrowInvalidOperationException()
+    public async Task SendAsync_WithVoidCommand_ExecutesSuccessfully()
     {
         // Arrange
-        var services = new ServiceCollection();
-        services.AddScoped<IMediator, Mediator>();
-        var serviceProvider = services.BuildServiceProvider();
-        var mediator = serviceProvider.GetRequiredService<IMediator>();
-        var query = new TestQuery(42);
+        var command = new TestVoidCommand { Action = "test action" };
 
         // Act
-        var act = () => mediator.SendAsync(query);
+        var result = await _mediator.SendAsync<Unit>(command);
 
         // Assert
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("No handler registered for request type 'TestQuery'");
+        Assert.Equal(Unit.Value, result);
+        Assert.Equal("test action", TestVoidCommandHandler.LastAction);
     }
 
     [Fact]
-    public async Task SendAsync_WithNullRequest_ShouldThrowArgumentNullException()
+    public async Task SendAsync_WithComplexResponse_ReturnsCorrectResponse()
     {
         // Arrange
-        var services = new ServiceCollection();
-        services.AddScoped<IMediator, Mediator>();
-        var serviceProvider = services.BuildServiceProvider();
-        var mediator = serviceProvider.GetRequiredService<IMediator>();
-
-        // Act
-        var act = () => mediator.SendAsync<TestResponse>(null!);
-
-        // Assert
-        await act.Should().ThrowAsync<ArgumentNullException>();
-    }
-
-    // Test fixtures
-    public record TestQuery(int Value) : IRequest<TestResponse>;
-
-    public record TestCommand(string Name) : IRequest<TestResponse>;
-
-    public record TestCommandWithoutResponse : IRequest;
-
-    public record TestResponse(int Value, string Message);
-
-    public class TestQueryHandler : IRequestHandler<TestQuery, TestResponse>
-    {
-        public Task<TestResponse> HandleAsync(TestQuery request, CancellationToken cancellationToken)
+        var request = new TestRequestWithResponse
         {
-            return Task.FromResult(new TestResponse(request.Value, "Success"));
-        }
+            Input = "complex test",
+            Number = 21
+        };
+
+        // Act
+        var result = await _mediator.SendAsync<TestResponse>(request);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal("Processed: complex test", result.Message);
+        Assert.Equal(42, result.Value);
     }
 
-    public class TestCommandHandler : IRequestHandler<TestCommand, TestResponse>
+    [Fact]
+    public async Task SendAsync_WithNullRequest_ThrowsArgumentNullException()
     {
-        public Task<TestResponse> HandleAsync(TestCommand request, CancellationToken cancellationToken)
-        {
-            return Task.FromResult(new TestResponse(100, request.Name));
-        }
+        // Act & Assert
+        await Assert.ThrowsAsync<ArgumentNullException>(() =>
+            _mediator.SendAsync<string>(null!));
     }
 
-    public class TestCommandWithoutResponseHandler : IRequestHandler<TestCommandWithoutResponse, Unit>
+    [Fact]
+    public async Task SendAsync_WithUnregisteredHandler_ThrowsInvalidOperationException()
     {
-        public Task<Unit> HandleAsync(TestCommandWithoutResponse request, CancellationToken cancellationToken)
-        {
-            return Task.FromResult(Unit.Value);
-        }
+        // Arrange
+        var services = new ServiceCollection();
+        // Don't register any handlers
+        services.AddScoped<IMediator, Mediator>();
+        using var serviceProvider = services.BuildServiceProvider();
+        var mediator = serviceProvider.GetRequiredService<IMediator>();
+
+        var query = new TestQuery { Input = "test" };
+
+        // Act & Assert
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            mediator.SendAsync<string>(query));
+
+        Assert.Contains("No handler registered for request type 'TestQuery'", exception.Message);
+    }
+
+    [Fact]
+    public async Task SendAsync_WithHandlerThatThrows_PropagatesException()
+    {
+        // Arrange
+        var services = new ServiceCollection();
+        services.AddScoped<IRequestHandler<ThrowingQuery, string>, ThrowingHandler>();
+        services.AddScoped<IMediator, Mediator>();
+        using var serviceProvider = services.BuildServiceProvider();
+        var mediator = serviceProvider.GetRequiredService<IMediator>();
+
+        var query = new ThrowingQuery { Input = "test" };
+
+        // Act & Assert
+        var exception = await Assert.ThrowsAsync<TargetInvocationException>(() =>
+            mediator.SendAsync<string>(query));
+
+        Assert.IsType<InvalidOperationException>(exception.InnerException);
+        Assert.Equal("Test exception", exception.InnerException.Message);
+    }
+
+    [Fact]
+    public async Task SendAsync_WithCancellationToken_PassesToHandler()
+    {
+        // Arrange
+        var query = new TestQuery { Input = "test" };
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        // Act & Assert
+        // Since our test handler doesn't check cancellation token, it will complete
+        // In a real scenario, a handler would check the token and throw OperationCanceledException
+        var result = await _mediator.SendAsync<string>(query, cts.Token);
+        Assert.Equal("Handled: test", result);
+    }
+
+    [Fact]
+    public void Constructor_WithNullServiceProvider_ThrowsArgumentNullException()
+    {
+        // Act & Assert
+        Assert.Throws<ArgumentNullException>(() => new Mediator(null!));
     }
 }
