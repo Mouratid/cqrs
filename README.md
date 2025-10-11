@@ -1,4 +1,4 @@
-# Mediator.CQRS
+# Mediator
 
 [![NuGet](https://img.shields.io/nuget/v/Mediator.CQRS.svg)](https://www.nuget.org/packages/Mediator.CQRS/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
