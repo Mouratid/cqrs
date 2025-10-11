@@ -1,139 +1,857 @@
-# Mediator Library - Public API
+# Mediator.CQRS - Public API Reference
 
 ## Overview
-This library provides a mediator pattern implementation for CQRS-style request/response handling with pipeline behavior support.
+
+This library provides a complete mediator pattern implementation for CQRS-style architectures, supporting both request/response handling and publish/subscribe notifications with extensible pipeline behaviors.
+
+**Version**: 1.0.0
+**Target Framework**: .NET Standard 2.0
+**Dependencies**: Microsoft.Extensions.DependencyInjection.Abstractions
+
+---
 
 ## Public API Surface
 
-### Interfaces
+### Core Interfaces
 
 #### `IMediator`
-Main entry point for sending requests.
+
+Main entry point for sending requests and publishing notifications.
+
 ```csharp
-public interface IMediator
+namespace Mediator
 {
-    Task<TResponse> SendAsync<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken = default);
+    public interface IMediator
+    {
+        /// <summary>
+        /// Sends a request to the appropriate handler and returns the response.
+        /// </summary>
+        /// <typeparam name="TResponse">The response type.</typeparam>
+        /// <param name="request">The request to send.</param>
+        /// <param name="cancellationToken">A cancellation token.</param>
+        /// <returns>The response from the handler.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when request is null.</exception>
+        /// <exception cref="InvalidOperationException">Thrown when no handler is registered for the request type.</exception>
+        Task<TResponse> SendAsync<TResponse>(
+            IRequest<TResponse> request,
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Publishes a notification to all registered handlers.
+        /// </summary>
+        /// <typeparam name="TNotification">The notification type.</typeparam>
+        /// <param name="notification">The notification to publish.</param>
+        /// <param name="cancellationToken">A cancellation token.</param>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when notification is null.</exception>
+        /// <exception cref="AggregateException">Thrown when multiple handlers fail.</exception>
+        Task Publish<TNotification>(
+            TNotification notification,
+            CancellationToken cancellationToken = default)
+            where TNotification : INotification;
+    }
 }
 ```
+
+**Behavior**:
+- `SendAsync`: Routes the request to exactly one handler. Throws `InvalidOperationException` if no handler is registered.
+- `Publish`: Invokes all registered handlers for the notification type in parallel using `Task.WhenAll`. If multiple handlers throw exceptions, they are aggregated into an `AggregateException`.
+
+---
+
+### Request/Response Interfaces
 
 #### `IRequest<TResponse>`
+
 Marker interface for requests that return a response.
+
 ```csharp
-public interface IRequest<out TResponse> { }
+namespace Mediator
+{
+    /// <summary>
+    /// Marker interface for requests that return a response.
+    /// </summary>
+    /// <typeparam name="TResponse">The type of response returned by the handler.</typeparam>
+    public interface IRequest<out TResponse> { }
+}
 ```
+
+**Usage**: Implement this interface on request types (queries, commands) that return data.
 
 #### `IRequest`
+
 Marker interface for requests without a response (returns `Unit`).
+
 ```csharp
-public interface IRequest : IRequest<Unit> { }
+namespace Mediator
+{
+    /// <summary>
+    /// Marker interface for requests that do not return a meaningful response.
+    /// </summary>
+    public interface IRequest : IRequest<Unit> { }
+}
 ```
+
+**Usage**: Implement this interface on command types that perform actions without returning data.
 
 #### `IRequestHandler<TRequest, TResponse>`
+
 Handler for processing requests.
+
 ```csharp
-public interface IRequestHandler<TRequest, TResponse>
-    where TRequest : IRequest<TResponse>
+namespace Mediator
 {
-    Task<TResponse> HandleAsync(TRequest request, CancellationToken cancellationToken);
+    /// <summary>
+    /// Handles a request and returns a response.
+    /// </summary>
+    /// <typeparam name="TRequest">The request type.</typeparam>
+    /// <typeparam name="TResponse">The response type.</typeparam>
+    public interface IRequestHandler<in TRequest, TResponse>
+        where TRequest : IRequest<TResponse>
+    {
+        /// <summary>
+        /// Handles the request and returns a response.
+        /// </summary>
+        /// <param name="request">The request to handle.</param>
+        /// <param name="cancellationToken">A cancellation token.</param>
+        /// <returns>The response.</returns>
+        Task<TResponse> HandleAsync(TRequest request, CancellationToken cancellationToken);
+    }
 }
 ```
 
-#### `IPipelineBehavior<TRequest, TResponse>`
-Pipeline behavior for cross-cutting concerns (validation, logging, etc.).
+**Service Lifetime**: Registered as **scoped** by default.
+
+---
+
+### Notification Interfaces
+
+#### `INotification`
+
+Marker interface for notifications.
+
 ```csharp
-public interface IPipelineBehavior<in TRequest, TResponse>
-    where TRequest : IRequest<TResponse>
+namespace Mediator
 {
-    Task<TResponse> Handle(TRequest request, RequestHandler<TResponse> nextHandler, CancellationToken cancellationToken);
+    /// <summary>
+    /// Marker interface for notifications that can be published to multiple handlers.
+    /// </summary>
+    public interface INotification { }
 }
 ```
+
+**Usage**: Implement this interface on notification types that represent domain events or side-effects.
+
+#### `INotificationHandler<TNotification>`
+
+Handler for processing notifications.
+
+```csharp
+namespace Mediator
+{
+    /// <summary>
+    /// Handles a notification.
+    /// </summary>
+    /// <typeparam name="TNotification">The notification type.</typeparam>
+    public interface INotificationHandler<in TNotification>
+        where TNotification : INotification
+    {
+        /// <summary>
+        /// Handles the notification.
+        /// </summary>
+        /// <param name="notification">The notification to handle.</param>
+        /// <param name="cancellationToken">A cancellation token.</param>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        Task HandleAsync(TNotification notification, CancellationToken cancellationToken);
+    }
+}
+```
+
+**Service Lifetime**: Registered as **scoped** by default.
+**Execution**: Multiple handlers for the same notification execute **in parallel**.
+
+---
+
+### Pipeline Behavior Interfaces
+
+#### `IPipelineBehavior<TRequest, TResponse>`
+
+Pipeline behavior for cross-cutting concerns on requests.
+
+```csharp
+namespace Mediator
+{
+    /// <summary>
+    /// Defines a pipeline behavior for requests (validation, logging, caching, etc.).
+    /// </summary>
+    /// <typeparam name="TRequest">The request type.</typeparam>
+    /// <typeparam name="TResponse">The response type.</typeparam>
+    public interface IPipelineBehavior<in TRequest, TResponse>
+        where TRequest : IRequest<TResponse>
+    {
+        /// <summary>
+        /// Handles the request and invokes the next behavior or handler in the pipeline.
+        /// </summary>
+        /// <param name="request">The request.</param>
+        /// <param name="nextHandler">The next handler in the pipeline.</param>
+        /// <param name="cancellationToken">A cancellation token.</param>
+        /// <returns>The response.</returns>
+        Task<TResponse> HandleAsync(
+            TRequest request,
+            RequestHandler<TResponse> nextHandler,
+            CancellationToken cancellationToken);
+    }
+}
+```
+
+**Service Lifetime**: Registered as **scoped** by default.
+**Execution Order**: Behaviors execute in **reverse registration order** (last registered executes first).
+**Short-Circuiting**: Behaviors can skip calling `nextHandler()` to short-circuit the pipeline (e.g., caching).
+
+#### `INotificationPipelineBehavior<TNotification>`
+
+Pipeline behavior for cross-cutting concerns on notifications.
+
+```csharp
+namespace Mediator
+{
+    /// <summary>
+    /// Defines a pipeline behavior for notifications (validation, logging, retry, etc.).
+    /// </summary>
+    /// <typeparam name="TNotification">The notification type.</typeparam>
+    public interface INotificationPipelineBehavior<in TNotification>
+        where TNotification : INotification
+    {
+        /// <summary>
+        /// Handles the notification and invokes the next behavior or handler in the pipeline.
+        /// </summary>
+        /// <param name="notification">The notification.</param>
+        /// <param name="nextHandler">The next handler in the pipeline.</param>
+        /// <param name="cancellationToken">A cancellation token.</param>
+        /// <returns>A task representing the asynchronous operation.</returns>
+        Task HandleAsync(
+            TNotification notification,
+            NotificationHandler nextHandler,
+            CancellationToken cancellationToken);
+    }
+}
+```
+
+**Service Lifetime**: Registered as **scoped** by default.
+**Execution Order**: Behaviors execute in **reverse registration order** (last registered executes first).
+**Scope**: Each notification handler is wrapped independently by the pipeline.
+
+---
 
 ### Delegates
 
 #### `RequestHandler<TResponse>`
-Delegate for the next handler in the pipeline.
+
+Delegate representing the next handler in the request pipeline.
+
 ```csharp
-public delegate Task<TResponse> RequestHandler<TResponse>();
+namespace Mediator
+{
+    /// <summary>
+    /// Delegate for the next request handler in the pipeline.
+    /// </summary>
+    /// <typeparam name="TResponse">The response type.</typeparam>
+    /// <returns>A task containing the response.</returns>
+    public delegate Task<TResponse> RequestHandler<TResponse>();
+}
 ```
+
+**Usage**: Invoke this delegate in `IPipelineBehavior<,>.HandleAsync()` to continue the pipeline.
+
+#### `NotificationHandler`
+
+Delegate representing the next handler in the notification pipeline.
+
+```csharp
+namespace Mediator
+{
+    /// <summary>
+    /// Delegate for the next notification handler in the pipeline.
+    /// </summary>
+    /// <returns>A task representing the asynchronous operation.</returns>
+    public delegate Task NotificationHandler();
+}
+```
+
+**Usage**: Invoke this delegate in `INotificationPipelineBehavior<>.HandleAsync()` to continue the pipeline.
+
+---
 
 ### Types
 
 #### `Unit`
+
 Represents a void return type for requests without a response.
+
 ```csharp
-public readonly record struct Unit
+namespace Mediator
 {
-    public static Unit Value { get; }
+    /// <summary>
+    /// Represents a void-like return type for requests that do not return data.
+    /// </summary>
+    public readonly record struct Unit
+    {
+        /// <summary>
+        /// Gets the singleton value of Unit.
+        /// </summary>
+        public static Unit Value { get; }
+    }
 }
 ```
+
+**Usage**: Return `Unit.Value` from handlers that don't produce meaningful output.
+**Performance**: Implemented as a readonly struct to avoid heap allocations.
+
+---
 
 ### Extension Methods
 
 #### `AddMediator`
+
 Registers the mediator and scans assemblies for handlers and behaviors.
+
 ```csharp
-public static class DependencyInjection
+namespace Mediator
 {
-    public static IServiceCollection AddMediator(this IServiceCollection services, params Assembly[] assemblies);
+    public static class DependencyInjection
+    {
+        /// <summary>
+        /// Registers the mediator and scans the provided assemblies for request handlers,
+        /// notification handlers, and pipeline behaviors.
+        /// </summary>
+        /// <param name="services">The service collection.</param>
+        /// <param name="assemblies">Assemblies to scan for handlers. At least one assembly must be provided.</param>
+        /// <returns>The service collection for chaining.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when services or assemblies is null.</exception>
+        /// <exception cref="ArgumentException">Thrown when no assemblies are provided.</exception>
+        public static IServiceCollection AddMediator(
+            this IServiceCollection services,
+            params Assembly[] assemblies);
+    }
 }
 ```
+
+**Behavior**:
+- Registers `IMediator` as **scoped**
+- Scans all provided assemblies for:
+  - `IRequestHandler<,>` implementations → registered as **scoped**
+  - `INotificationHandler<>` implementations → registered as **scoped**
+  - `IPipelineBehavior<,>` implementations → registered as **scoped**
+  - `INotificationPipelineBehavior<>` implementations → registered as **scoped**
+- Only scans **public**, **non-abstract**, **non-generic type definitions** classes
+
+**Example**:
+```csharp
+services.AddMediator(
+    typeof(Program).Assembly,
+    typeof(Application.CreateOrderCommand).Assembly
+);
+```
+
+---
 
 ## Internal Implementation Details
 
-The following types are internal and not part of the public API:
+The following types are internal and **not** part of the public API:
 - `Mediator` class (implementation of `IMediator`)
 
-## Usage
+---
 
-### Registration
+## Usage Examples
+
+### Request/Response Pattern
+
+#### Query Example
+
 ```csharp
-services.AddMediator(Assembly.GetExecutingAssembly());
-```
+using Mediator;
 
-### Query Example
-```csharp
-public record GetUserQuery(int Id) : IRequest<User>;
+// Define query and response
+public record GetUserQuery(int UserId) : IRequest<UserDto>;
+public record UserDto(int Id, string Name, string Email);
 
-public class GetUserHandler : IRequestHandler<GetUserQuery, User>
+// Define handler
+public class GetUserQueryHandler : IRequestHandler<GetUserQuery, UserDto>
 {
-    public Task<User> HandleAsync(GetUserQuery request, CancellationToken cancellationToken)
+    private readonly IUserRepository _repository;
+
+    public GetUserQueryHandler(IUserRepository repository) => _repository = repository;
+
+    public async Task<UserDto> HandleAsync(GetUserQuery request, CancellationToken cancellationToken)
     {
-        // Implementation
+        var user = await _repository.GetByIdAsync(request.UserId, cancellationToken);
+        return new UserDto(user.Id, user.Name, user.Email);
     }
 }
 
 // Usage
-var user = await mediator.SendAsync(new GetUserQuery(1));
+var user = await mediator.SendAsync(new GetUserQuery(42), cancellationToken);
 ```
 
-### Command Example (no response)
-```csharp
-public record DeleteUserCommand(int Id) : IRequest;
+#### Command with Response
 
-public class DeleteUserHandler : IRequestHandler<DeleteUserCommand, Unit>
+```csharp
+// Define command and response
+public record CreateOrderCommand(int UserId, List<OrderItem> Items) : IRequest<int>;
+
+// Define handler
+public class CreateOrderCommandHandler : IRequestHandler<CreateOrderCommand, int>
 {
-    public Task<Unit> HandleAsync(DeleteUserCommand request, CancellationToken cancellationToken)
+    public async Task<int> HandleAsync(CreateOrderCommand request, CancellationToken cancellationToken)
     {
-        // Implementation
-        return Task.FromResult(Unit.Value);
+        // Create order and return ID
+        var orderId = await _repository.CreateAsync(request.UserId, request.Items, cancellationToken);
+        return orderId;
     }
 }
 
 // Usage
-await mediator.SendAsync(new DeleteUserCommand(1));
+var orderId = await mediator.SendAsync(new CreateOrderCommand(userId, items), cancellationToken);
 ```
 
-### Pipeline Behavior Example
+#### Command without Response
+
+```csharp
+// Define command (no response)
+public record DeleteUserCommand(int UserId) : IRequest;
+
+// Define handler
+public class DeleteUserCommandHandler : IRequestHandler<DeleteUserCommand, Unit>
+{
+    public async Task<Unit> HandleAsync(DeleteUserCommand request, CancellationToken cancellationToken)
+    {
+        await _repository.DeleteAsync(request.UserId, cancellationToken);
+        return Unit.Value;
+    }
+}
+
+// Usage
+await mediator.SendAsync(new DeleteUserCommand(userId), cancellationToken);
+```
+
+---
+
+### Publish/Subscribe Pattern
+
+#### Notification Example
+
+```csharp
+// Define notification
+public record OrderPlacedNotification(int OrderId, int UserId, decimal TotalAmount) : INotification;
+
+// Define multiple handlers
+public class SendOrderConfirmationEmailHandler : INotificationHandler<OrderPlacedNotification>
+{
+    private readonly IEmailService _emailService;
+
+    public SendOrderConfirmationEmailHandler(IEmailService emailService) => _emailService = emailService;
+
+    public async Task HandleAsync(OrderPlacedNotification notification, CancellationToken cancellationToken)
+    {
+        await _emailService.SendOrderConfirmationAsync(
+            notification.UserId,
+            notification.OrderId,
+            cancellationToken);
+    }
+}
+
+public class UpdateInventoryHandler : INotificationHandler<OrderPlacedNotification>
+{
+    private readonly IInventoryService _inventoryService;
+
+    public UpdateInventoryHandler(IInventoryService inventoryService) => _inventoryService = inventoryService;
+
+    public async Task HandleAsync(OrderPlacedNotification notification, CancellationToken cancellationToken)
+    {
+        await _inventoryService.ReserveInventoryAsync(notification.OrderId, cancellationToken);
+    }
+}
+
+// Usage - both handlers execute in parallel
+await mediator.Publish(
+    new OrderPlacedNotification(orderId, userId, totalAmount),
+    cancellationToken);
+```
+
+#### Exception Handling
+
+```csharp
+try
+{
+    await mediator.Publish(notification, cancellationToken);
+}
+catch (AggregateException ex) when (ex.InnerExceptions.Count > 1)
+{
+    // Multiple handlers failed
+    foreach (var innerException in ex.InnerExceptions)
+    {
+        _logger.LogError(innerException, "Notification handler failed");
+    }
+}
+catch (Exception ex)
+{
+    // Single handler failed
+    _logger.LogError(ex, "Notification handler failed");
+}
+```
+
+---
+
+### Pipeline Behaviors
+
+#### Request Logging Behavior
+
 ```csharp
 public class LoggingBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
     where TRequest : IRequest<TResponse>
 {
-    public async Task<TResponse> Handle(TRequest request, RequestHandler<TResponse> nextHandler, CancellationToken cancellationToken)
+    private readonly ILogger<LoggingBehavior<TRequest, TResponse>> _logger;
+
+    public LoggingBehavior(ILogger<LoggingBehavior<TRequest, TResponse>> logger)
     {
-        // Before
+        _logger = logger;
+    }
+
+    public async Task<TResponse> HandleAsync(
+        TRequest request,
+        RequestHandler<TResponse> nextHandler,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("Handling {RequestName}", typeof(TRequest).Name);
+
         var response = await nextHandler();
-        // After
+
+        _logger.LogInformation("Handled {RequestName}", typeof(TRequest).Name);
+
         return response;
     }
 }
 ```
+
+#### Request Validation Behavior
+
+```csharp
+public interface IValidatable
+{
+    IEnumerable<string> Validate();
+}
+
+public class ValidationBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
+    where TRequest : IRequest<TResponse>
+{
+    public async Task<TResponse> HandleAsync(
+        TRequest request,
+        RequestHandler<TResponse> nextHandler,
+        CancellationToken cancellationToken)
+    {
+        if (request is IValidatable validatable)
+        {
+            var errors = validatable.Validate().ToList();
+            if (errors.Any())
+            {
+                throw new ValidationException(string.Join(", ", errors));
+            }
+        }
+
+        return await nextHandler();
+    }
+}
+```
+
+#### Request Caching Behavior (Short-Circuiting)
+
+```csharp
+public interface ICacheable
+{
+    string CacheKey { get; }
+    TimeSpan CacheDuration { get; }
+}
+
+public class CachingBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
+    where TRequest : IRequest<TResponse>
+{
+    private readonly IDistributedCache _cache;
+
+    public CachingBehavior(IDistributedCache cache) => _cache = cache;
+
+    public async Task<TResponse> HandleAsync(
+        TRequest request,
+        RequestHandler<TResponse> nextHandler,
+        CancellationToken cancellationToken)
+    {
+        if (request is not ICacheable cacheable)
+            return await nextHandler();
+
+        var cachedValue = await _cache.GetStringAsync(cacheable.CacheKey, cancellationToken);
+        if (cachedValue != null)
+        {
+            // Short-circuit: don't call nextHandler()
+            return JsonSerializer.Deserialize<TResponse>(cachedValue)!;
+        }
+
+        var response = await nextHandler();
+        await _cache.SetStringAsync(
+            cacheable.CacheKey,
+            JsonSerializer.Serialize(response),
+            cancellationToken);
+
+        return response;
+    }
+}
+```
+
+#### Notification Logging Behavior
+
+```csharp
+public class NotificationLoggingBehavior<TNotification> : INotificationPipelineBehavior<TNotification>
+    where TNotification : INotification
+{
+    private readonly ILogger<NotificationLoggingBehavior<TNotification>> _logger;
+
+    public NotificationLoggingBehavior(ILogger<NotificationLoggingBehavior<TNotification>> logger)
+    {
+        _logger = logger;
+    }
+
+    public async Task HandleAsync(
+        TNotification notification,
+        NotificationHandler nextHandler,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("Processing {NotificationName}", typeof(TNotification).Name);
+
+        try
+        {
+            await nextHandler();
+            _logger.LogInformation("Processed {NotificationName}", typeof(TNotification).Name);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error processing {NotificationName}", typeof(TNotification).Name);
+            throw;
+        }
+    }
+}
+```
+
+#### Notification Retry Behavior
+
+```csharp
+public class NotificationRetryBehavior<TNotification> : INotificationPipelineBehavior<TNotification>
+    where TNotification : INotification
+{
+    private readonly ILogger<NotificationRetryBehavior<TNotification>> _logger;
+    private const int MaxRetries = 3;
+
+    public NotificationRetryBehavior(ILogger<NotificationRetryBehavior<TNotification>> logger)
+    {
+        _logger = logger;
+    }
+
+    public async Task HandleAsync(
+        TNotification notification,
+        NotificationHandler nextHandler,
+        CancellationToken cancellationToken)
+    {
+        var attempt = 0;
+        while (attempt < MaxRetries)
+        {
+            try
+            {
+                await nextHandler();
+                return;
+            }
+            catch (Exception ex) when (attempt < MaxRetries - 1)
+            {
+                attempt++;
+                _logger.LogWarning(ex, "Retry attempt {Attempt}/{MaxRetries}", attempt, MaxRetries);
+                await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, attempt)), cancellationToken);
+            }
+        }
+    }
+}
+```
+
+---
+
+## Registration
+
+### Basic Registration
+
+```csharp
+using Mediator;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Register mediator and scan current assembly
+builder.Services.AddMediator(Assembly.GetExecutingAssembly());
+```
+
+### Multiple Assembly Registration
+
+```csharp
+builder.Services.AddMediator(
+    typeof(Program).Assembly,                    // API layer
+    typeof(Application.Commands).Assembly,       // Application layer
+    typeof(Infrastructure.Repositories).Assembly // Infrastructure layer
+);
+```
+
+### Custom Service Lifetime Override
+
+```csharp
+// Register mediator with default scoped lifetime
+services.AddMediator(Assembly.GetExecutingAssembly());
+
+// Override specific handler to singleton
+services.AddSingleton<IRequestHandler<GetCachedDataQuery, CachedData>, GetCachedDataQueryHandler>();
+```
+
+---
+
+## Behavior Execution Model
+
+### Request Pipeline Execution Order
+
+Behaviors execute in **reverse registration order**:
+
+```csharp
+// These behaviors are discovered during assembly scanning:
+// - TransactionBehavior
+// - ValidationBehavior
+// - LoggingBehavior
+
+// Execution flow:
+Request
+    → TransactionBehavior (last registered, executes first)
+        → ValidationBehavior
+            → LoggingBehavior
+                → Handler
+            ← LoggingBehavior
+        ← ValidationBehavior
+    ← TransactionBehavior
+← Response
+```
+
+### Notification Pipeline Execution
+
+Each notification handler is wrapped **independently** by pipeline behaviors:
+
+```csharp
+Publish(notification)
+    ↓
+Task.WhenAll(
+    Pipeline → Handler #1,  // Runs in parallel
+    Pipeline → Handler #2,  // Runs in parallel
+    Pipeline → Handler #3   // Runs in parallel
+)
+    ↓
+Complete (or AggregateException if multiple handlers fail)
+```
+
+---
+
+## Exception Handling
+
+### Request Exceptions
+
+Exceptions thrown by handlers or behaviors propagate directly to the caller:
+
+```csharp
+try
+{
+    var result = await mediator.SendAsync(new GetUserQuery(userId), cancellationToken);
+}
+catch (UserNotFoundException ex)
+{
+    // Handle specific exception
+}
+catch (Exception ex)
+{
+    // Handle general exception
+}
+```
+
+### Notification Exceptions
+
+**Single Handler Fails**: Exception propagates directly.
+
+**Multiple Handlers Fail**: All exceptions are collected into an `AggregateException`:
+
+```csharp
+try
+{
+    await mediator.Publish(notification, cancellationToken);
+}
+catch (AggregateException ex) when (ex.InnerExceptions.Count > 1)
+{
+    // Multiple handlers threw exceptions
+    foreach (var inner in ex.InnerExceptions)
+    {
+        _logger.LogError(inner, "Handler failed");
+    }
+}
+catch (Exception ex)
+{
+    // Single handler threw exception
+    _logger.LogError(ex, "Handler failed");
+}
+```
+
+---
+
+## Performance Characteristics
+
+### Service Lifetime
+
+- **Mediator**: Scoped
+- **Handlers**: Scoped (default)
+- **Behaviors**: Scoped (default)
+
+**Rationale**: Aligns with typical ASP.NET Core request lifetimes and ensures proper disposal of resources.
+
+### Handler Resolution
+
+- Handlers are resolved from the DI container at runtime using reflection
+- .NET's DI container caches type information for efficient resolution
+- No runtime code generation or compilation
+
+### Notification Execution
+
+- All handlers execute **in parallel** via `Task.WhenAll`
+- Maximizes throughput for independent operations
+- Exceptions are aggregated if multiple handlers fail
+
+### Memory Allocation
+
+- `Unit` is a readonly struct (stack-allocated, no heap pressure)
+- Records encourage immutable patterns
+- Pipeline delegates reuse existing task infrastructure
+
+---
+
+## API Stability
+
+This is the **v1.0.0** release. The public API is stable and follows semantic versioning:
+
+- **Major version** changes indicate breaking changes
+- **Minor version** changes indicate new features (backward compatible)
+- **Patch version** changes indicate bug fixes
+
+---
+
+## See Also
+
+- [README.md](../README.md) - Complete documentation with examples
+- [LICENSE](../LICENSE) - MIT License
+- [NuGet Package](https://www.nuget.org/packages/Mediator.CQRS/)
+
+---
+
+**Copyright (c) 2025 Alexandros Mouratidis**
+Licensed under the MIT License
