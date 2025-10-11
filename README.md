@@ -1,6 +1,5 @@
 # Mediator
 
-[![NuGet](https://img.shields.io/nuget/v/Mediator.CQRS.svg)](https://www.nuget.org/packages/Mediator.CQRS/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-106%20passed-brightgreen.svg)]()
 [![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen.svg)]()
@@ -21,7 +20,7 @@ A lightweight, zero-configuration mediator implementation for .NET supporting th
 ## Installation
 
 ```bash
-dotnet add package Mediator.CQRS
+dotnet add package *PENDING*
 ```
 
 ## Table of Contents
