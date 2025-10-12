@@ -4,27 +4,41 @@
     <TargetFramework>netstandard2.0</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
-    <PackageId>Mediator.CQRS</PackageId>
+      
+    <PackageId>AMediator</PackageId>
     <Version>1.0.0</Version>
-    <Authors>Your Name</Authors>
-    <Company>Your Company</Company>
-    <Description>A lightweight, high-performance mediator pattern implementation for CQRS-style request/response handling with pipeline behavior support.</Description>
-    <PackageTags>mediator;cqrs;pipeline;behavior;request;response;handler;command;query</PackageTags>
-    <PackageProjectUrl>https://github.com/yourusername/mediator</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/yourusername/mediator</RepositoryUrl>
+    <Authors>Alexandros Mouratidis</Authors>
+    <Company>Alexandros Mouratidis</Company>
+      
+    <Description>A lightweight, zero-configuration mediator implementation for .NET supporting the CQRS pattern with request/response handling, notification publishing, and extensible pipeline behaviors.</Description>
+    <PackageTags>csharp;dotnet;mediator;cqrs;request;response;notifications;events;handler;command;query;pipeline;behavior</PackageTags>
+      
+    <PackageProjectUrl>https://github.com/Mouratid/mediator</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/Mouratid/mediator</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
+      
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
+      
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
+
+    <PackageReleaseNotes>
+        - Initial release of AMediator
+        - Provides request/response, notification, and pipeline behavior patterns
+        - Compatible with .NET Standard 2.0 and higher
+    </PackageReleaseNotes>
+
+    <PackageIcon>Icon.png</PackageIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <None Include="..\README.md" Pack="true" PackagePath="\" />
+    <None Include="Icon.png" Pack="true" PackagePath="\" />
   </ItemGroup>
 
   <ItemGroup>
