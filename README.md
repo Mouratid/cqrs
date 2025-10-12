@@ -1,4 +1,4 @@
-# Mediator
+# AMediator
 
 [![NuGet](https://img.shields.io/nuget/v/AMediator.svg)](https://www.nuget.org/packages/AMediator)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
