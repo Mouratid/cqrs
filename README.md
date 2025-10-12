@@ -765,15 +765,15 @@ IMediator.Publish(notification)
 │  Parallel Execution (Task.WhenAll)           │
 ├──────────────────────────────────────────────┤
 │  INotificationPipelineBehavior<TNotification>│
-│      ↓                                        │
+│      ↓                                       │
 │  INotificationHandler<TNotification> #1      │
 ├──────────────────────────────────────────────┤
 │  INotificationPipelineBehavior<TNotification>│
-│      ↓                                        │
+│      ↓                                       │
 │  INotificationHandler<TNotification> #2      │
 ├──────────────────────────────────────────────┤
 │  INotificationPipelineBehavior<TNotification>│
-│      ↓                                        │
+│      ↓                                       │
 │  INotificationHandler<TNotification> #N      │
 └──────────────────────────────────────────────┘
     ↓
