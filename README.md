@@ -783,7 +783,7 @@ Complete
 ### Project Structure
 
 ```
-Mediator.CQRS/
+AMediator/
 ├── IMediator.cs                          # Main mediator interface
 ├── Mediator.cs                           # Mediator implementation
 ├── IRequest.cs                           # Request marker interfaces
@@ -1083,7 +1083,7 @@ public class ValidationBehavior<TRequest, TResponse> : IPipelineBehavior<TReques
 
 ## Comparison with MediatR
 
-| Feature | Mediator.CQRS | MediatR |
+| Feature | AMediator | MediatR |
 |---------|---------------|---------|
 | Request/Response | ✅ | ✅ |
 | Notifications | ✅ | ✅ |
@@ -1097,7 +1097,7 @@ public class ValidationBehavior<TRequest, TResponse> : IPipelineBehavior<TReques
 | Test Coverage | 100% | ~95% |
 | Complexity | Low | Medium |
 
-**Choose Mediator.CQRS if:**
+**Choose AMediator if:**
 - You want a lightweight, focused implementation
 - You need notification pipeline behaviors
 - You prefer minimal dependencies
