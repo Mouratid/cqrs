@@ -1,6 +1,7 @@
 # AMediator
 
 [![NuGet](https://img.shields.io/nuget/v/AMediator.svg)](https://www.nuget.org/packages/AMediator)
+[![NuGet Downloads](https://img.shields.io/nuget/dt/AMediator.svg)](https://www.nuget.org/packages/AMediator)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-106%20passed-brightgreen.svg)]()
 [![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen.svg)]()
