@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
@@ -54,10 +56,63 @@ namespace Mediator
             return await handlerDelegate().ConfigureAwait(false);
         }
 
+        public IAsyncEnumerable<TResponse> SendStreamAsync<TResponse>(
+            IStreamRequest<TResponse> request,
+            CancellationToken cancellationToken = default)
+        {
+            if (request == null) throw new ArgumentNullException(nameof(request));
+
+            return SendStreamAsyncCore(request, cancellationToken);
+        }
+
+        private async IAsyncEnumerable<TResponse> SendStreamAsyncCore<TResponse>(
+            IStreamRequest<TResponse> request,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            var requestType = request.GetType();
+            var responseType = typeof(TResponse);
+            var handlerType = typeof(IStreamRequestHandler<,>).MakeGenericType(requestType, responseType);
+
+            // Get the handler from DI
+            var handler = _serviceProvider.GetService(handlerType)
+                ?? throw new InvalidOperationException($"No stream handler registered for request type '{requestType.Name}'");
+
+            // Get behaviors from DI
+            var behaviorType = typeof(IStreamPipelineBehavior<,>).MakeGenericType(requestType, responseType);
+            var behaviors = _serviceProvider.GetServices(behaviorType).Reverse().ToList();
+
+            // Build the pipeline
+            StreamRequestHandler<TResponse> handlerDelegate = () =>
+            {
+                var handleMethod = handlerType.GetMethod(nameof(IStreamRequestHandler<IStreamRequest<object>, object>.HandleAsync));
+                var result = handleMethod.Invoke(handler, new object[] { request, cancellationToken });
+                return (IAsyncEnumerable<TResponse>)result;
+            };
+
+            // Wrap handler with behaviors
+            foreach (var behavior in behaviors)
+            {
+                var currentDelegate = handlerDelegate;
+                var behaviorHandleMethod = behaviorType.GetMethod(nameof(IStreamPipelineBehavior<IStreamRequest<object>, object>.HandleAsync));
+
+                handlerDelegate = () =>
+                {
+                    var result = behaviorHandleMethod.Invoke(behavior, new object[] { request, currentDelegate, cancellationToken });
+                    return (IAsyncEnumerable<TResponse>)result;
+                };
+            }
+
+            // Execute the pipeline and yield results
+            await foreach (var item in handlerDelegate().WithCancellation(cancellationToken).ConfigureAwait(false))
+            {
+                yield return item;
+            }
+        }
+
         public async Task Publish<TNotification>(TNotification notification, CancellationToken cancellationToken = default)
             where TNotification : INotification
         {
-            if (notification == null) throw new ArgumentNullException(nameof(notification));
+            if (notification is null) throw new ArgumentNullException(nameof(notification));
 
             // Get all handlers for this notification type
             var handlers = _serviceProvider.GetServices<INotificationHandler<TNotification>>().ToList();

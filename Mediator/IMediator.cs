@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -16,6 +18,17 @@ namespace Mediator
         /// <param name="cancellationToken">A cancellation token.</param>
         /// <returns>The response from the handler.</returns>
         Task<TResponse> SendAsync<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Sends a streaming request to the appropriate handler.
+        /// </summary>
+        /// <typeparam name="TResponse">The type of items in the stream.</typeparam>
+        /// <param name="request">The streaming request to send.</param>
+        /// <param name="cancellationToken">A cancellation token that can be used to cancel the stream enumeration.</param>
+        /// <returns>An async stream of responses from the handler.</returns>
+        IAsyncEnumerable<TResponse> SendStreamAsync<TResponse>(
+            IStreamRequest<TResponse> request,
+            CancellationToken cancellationToken = default);
 
         /// <summary>
         /// Publishes a notification to all registered notification handlers.

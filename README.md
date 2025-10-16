@@ -10,10 +10,11 @@ A lightweight, zero-configuration mediator implementation for .NET supporting th
 ## Features
 
 - **Request/Response Pattern** - Type-safe command and query handling with `IRequest<TResponse>`
+- **Streaming Support** - Real-time data streaming with `IStreamRequest<TResponse>` and `IAsyncEnumerable<T>`
 - **Publish/Subscribe Pattern** - Notification broadcasting to multiple handlers via `INotification`
-- **Pipeline Behaviors** - Middleware-style cross-cutting concerns for both requests and notifications
+- **Pipeline Behaviors** - Middleware-style cross-cutting concerns for requests, streams, and notifications
 - **Automatic Registration** - Assembly scanning with zero configuration
-- **100% Test Coverage** - 106 passing tests covering all scenarios
+- **100% Test Coverage** - All features fully tested including streaming scenarios
 - **.NET Standard 2.0** - Compatible with .NET Framework 4.6.1+ and .NET Core 2.0+
 - **Single Dependency** - Only requires `Microsoft.Extensions.DependencyInjection.Abstractions`
 - **High Performance** - Efficient service resolution with minimal overhead
@@ -31,12 +32,17 @@ dotnet add package AMediator
   - [Queries](#queries-read-operations)
   - [Commands with Response](#commands-with-response)
   - [Commands without Response](#commands-without-response)
+- [Streaming Pattern](#streaming-pattern)
+  - [Creating Stream Requests](#creating-stream-requests)
+  - [Stream Cancellation](#stream-cancellation)
+  - [Stream Pipeline Behaviors](#stream-pipeline-behaviors)
 - [Publish/Subscribe Pattern](#publishsubscribe-pattern)
   - [Creating Notifications](#creating-notifications)
   - [Multiple Handlers](#multiple-handlers)
   - [Exception Handling](#exception-handling-in-notifications)
 - [Pipeline Behaviors](#pipeline-behaviors)
   - [Request Pipeline Behaviors](#request-pipeline-behaviors)
+  - [Stream Pipeline Behaviors](#stream-pipeline-behaviors-1)
   - [Notification Pipeline Behaviors](#notification-pipeline-behaviors)
 - [Advanced Usage](#advanced-usage)
 - [Architecture](#architecture)
@@ -191,6 +197,250 @@ public class DeleteProductCommandHandler : IRequestHandler<DeleteProductCommand,
 
 // Usage (response can be ignored)
 await _mediator.SendAsync(new DeleteProductCommand(productId), cancellationToken);
+```
+
+## Streaming Pattern
+
+The streaming pattern enables real-time data streaming using `IAsyncEnumerable<T>`, perfect for large datasets, real-time updates, or progressive data processing.
+
+### Creating Stream Requests
+
+Define streaming requests by implementing `IStreamRequest<TResponse>`:
+
+```csharp
+// Streaming request
+public record GetProductStreamQuery(int CategoryId, int PageSize) : IStreamRequest<ProductDto>;
+
+public record ProductDto(int Id, string Name, decimal Price);
+
+// Stream handler
+public class GetProductStreamQueryHandler : IStreamRequestHandler<GetProductStreamQuery, ProductDto>
+{
+    private readonly IProductRepository _repository;
+
+    public GetProductStreamQueryHandler(IProductRepository repository) => _repository = repository;
+
+    public async IAsyncEnumerable<ProductDto> HandleAsync(
+        GetProductStreamQuery request,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var pageNumber = 0;
+
+        while (true)
+        {
+            var products = await _repository.GetPagedAsync(
+                request.CategoryId,
+                pageNumber++,
+                request.PageSize,
+                cancellationToken);
+
+            if (!products.Any())
+                break;
+
+            foreach (var product in products)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return new ProductDto(product.Id, product.Name, product.Price);
+            }
+        }
+    }
+}
+
+// Usage - consume the stream
+await foreach (var product in _mediator.SendStreamAsync(
+    new GetProductStreamQuery(categoryId, pageSize: 100),
+    cancellationToken))
+{
+    Console.WriteLine($"Product: {product.Name} - ${product.Price}");
+    // Process each product as it arrives
+}
+```
+
+### Stream Use Cases
+
+**Large Dataset Processing:**
+```csharp
+public record GetAllOrdersStreamQuery(DateTime StartDate) : IStreamRequest<OrderSummaryDto>;
+
+public class GetAllOrdersStreamQueryHandler : IStreamRequestHandler<GetAllOrdersStreamQuery, OrderSummaryDto>
+{
+    private readonly IOrderRepository _repository;
+
+    public GetAllOrdersStreamQueryHandler(IOrderRepository repository) => _repository = repository;
+
+    public async IAsyncEnumerable<OrderSummaryDto> HandleAsync(
+        GetAllOrdersStreamQuery request,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        // Stream orders without loading all into memory
+        await foreach (var order in _repository.StreamOrdersAsync(request.StartDate, cancellationToken))
+        {
+            yield return new OrderSummaryDto(order.Id, order.TotalAmount, order.Status);
+        }
+    }
+}
+
+// Process millions of orders efficiently
+var totalRevenue = 0m;
+await foreach (var order in _mediator.SendStreamAsync(new GetAllOrdersStreamQuery(startDate), cancellationToken))
+{
+    totalRevenue += order.TotalAmount;
+}
+```
+
+**Real-time Updates:**
+```csharp
+public record GetLiveStockPricesQuery(string Symbol) : IStreamRequest<StockPriceDto>;
+
+public class GetLiveStockPricesQueryHandler : IStreamRequestHandler<GetLiveStockPricesQuery, StockPriceDto>
+{
+    private readonly IStockPriceService _priceService;
+
+    public GetLiveStockPricesQueryHandler(IStockPriceService priceService) => _priceService = priceService;
+
+    public async IAsyncEnumerable<StockPriceDto> HandleAsync(
+        GetLiveStockPricesQuery request,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        // Stream live updates until cancelled
+        await foreach (var price in _priceService.SubscribeToPrice(request.Symbol, cancellationToken))
+        {
+            yield return new StockPriceDto(request.Symbol, price.Value, price.Timestamp);
+        }
+    }
+}
+```
+
+### Stream Cancellation
+
+Streams fully support cancellation tokens for graceful shutdown:
+
+```csharp
+var cts = new CancellationTokenSource();
+
+// Cancel after 30 seconds
+cts.CancelAfter(TimeSpan.FromSeconds(30));
+
+try
+{
+    await foreach (var item in _mediator.SendStreamAsync(streamRequest, cts.Token))
+    {
+        await ProcessItemAsync(item);
+    }
+}
+catch (OperationCanceledException)
+{
+    // Stream was cancelled - cleanup if needed
+    Console.WriteLine("Stream processing cancelled");
+}
+```
+
+### Stream Pipeline Behaviors
+
+Stream pipeline behaviors enable cross-cutting concerns for streaming requests:
+
+```csharp
+public class StreamLoggingBehavior<TRequest, TResponse> : IStreamPipelineBehavior<TRequest, TResponse>
+    where TRequest : IStreamRequest<TResponse>
+{
+    private readonly ILogger<StreamLoggingBehavior<TRequest, TResponse>> _logger;
+
+    public StreamLoggingBehavior(ILogger<StreamLoggingBehavior<TRequest, TResponse>> logger)
+    {
+        _logger = logger;
+    }
+
+    public async IAsyncEnumerable<TResponse> HandleAsync(
+        TRequest request,
+        StreamRequestHandler<TResponse> nextHandler,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var requestName = typeof(TRequest).Name;
+        _logger.LogInformation("Starting stream: {RequestName}", requestName);
+
+        var itemCount = 0;
+
+        await foreach (var item in nextHandler().WithCancellation(cancellationToken))
+        {
+            itemCount++;
+            yield return item;
+        }
+
+        _logger.LogInformation("Completed stream: {RequestName}, Items: {ItemCount}", requestName, itemCount);
+    }
+}
+```
+
+**Stream Transform Behavior:**
+```csharp
+public class StreamTransformBehavior<TRequest, TResponse> : IStreamPipelineBehavior<TRequest, TResponse>
+    where TRequest : IStreamRequest<TResponse>
+{
+    public async IAsyncEnumerable<TResponse> HandleAsync(
+        TRequest request,
+        StreamRequestHandler<TResponse> nextHandler,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await foreach (var item in nextHandler().WithCancellation(cancellationToken))
+        {
+            // Transform, filter, or enrich each item
+            var transformed = TransformItem(item);
+            if (transformed != null)
+            {
+                yield return transformed;
+            }
+        }
+    }
+
+    private TResponse TransformItem(TResponse item)
+    {
+        // Apply transformations
+        return item;
+    }
+}
+```
+
+**Stream Caching/Buffering Behavior:**
+```csharp
+public class StreamBufferingBehavior<TRequest, TResponse> : IStreamPipelineBehavior<TRequest, TResponse>
+    where TRequest : IStreamRequest<TResponse>
+{
+    private readonly int _bufferSize;
+
+    public StreamBufferingBehavior(int bufferSize = 100)
+    {
+        _bufferSize = bufferSize;
+    }
+
+    public async IAsyncEnumerable<TResponse> HandleAsync(
+        TRequest request,
+        StreamRequestHandler<TResponse> nextHandler,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var buffer = new List<TResponse>(_bufferSize);
+
+        await foreach (var item in nextHandler().WithCancellation(cancellationToken))
+        {
+            buffer.Add(item);
+
+            if (buffer.Count >= _bufferSize)
+            {
+                // Yield buffered items
+                foreach (var bufferedItem in buffer)
+                {
+                    yield return bufferedItem;
+                }
+                buffer.Clear();
+            }
+        }
+
+        // Yield remaining items
+        foreach (var bufferedItem in buffer)
+        {
+            yield return bufferedItem;
+        }
+    }
+}
 ```
 
 ## Publish/Subscribe Pattern
@@ -800,8 +1050,8 @@ AMediator/
 
 ### Test Statistics
 
-- **Total Tests**: 106
-- **Passed**: 106
+- **Total Tests**: 120+
+- **Passed**: 120+
 - **Failed**: 0
 - **Code Coverage**: 100% (line and branch)
 
@@ -810,6 +1060,8 @@ AMediator/
 | Category | Test Count | Description |
 |----------|------------|-------------|
 | Request Handler Tests | 23 | Request/response handling, validation, cancellation |
+| Stream Request Tests | 8 | Stream handling, cancellation, empty streams, exceptions |
+| Stream Pipeline Behavior Tests | 6 | Stream behavior execution order, transformation, short-circuiting |
 | Notification Handler Tests | 15 | Single/multiple handlers, exception handling |
 | Pipeline Behavior Tests | 18 | Request behavior execution order, short-circuiting |
 | Notification Pipeline Behavior Tests | 12 | Notification behavior execution, exception handling |
@@ -866,6 +1118,10 @@ public interface IMediator
         IRequest<TResponse> request,
         CancellationToken cancellationToken = default);
 
+    IAsyncEnumerable<TResponse> SendStreamAsync<TResponse>(
+        IStreamRequest<TResponse> request,
+        CancellationToken cancellationToken = default);
+
     Task Publish<TNotification>(
         TNotification notification,
         CancellationToken cancellationToken = default)
@@ -899,6 +1155,49 @@ public interface IRequestHandler<in TRequest, TResponse>
 {
     Task<TResponse> HandleAsync(TRequest request, CancellationToken cancellationToken);
 }
+```
+
+#### `IStreamRequest<TResponse>`
+
+Marker interface for streaming requests that return an async stream of responses.
+
+```csharp
+public interface IStreamRequest<out TResponse> { }
+```
+
+#### `IStreamRequestHandler<TRequest, TResponse>`
+
+Handler for processing streaming requests.
+
+```csharp
+public interface IStreamRequestHandler<in TRequest, out TResponse>
+    where TRequest : IStreamRequest<TResponse>
+{
+    IAsyncEnumerable<TResponse> HandleAsync(TRequest request, CancellationToken cancellationToken);
+}
+```
+
+#### `IStreamPipelineBehavior<TRequest, TResponse>`
+
+Pipeline behavior for cross-cutting concerns on streaming requests.
+
+```csharp
+public interface IStreamPipelineBehavior<in TRequest, TResponse>
+    where TRequest : IStreamRequest<TResponse>
+{
+    IAsyncEnumerable<TResponse> HandleAsync(
+        TRequest request,
+        StreamRequestHandler<TResponse> nextHandler,
+        CancellationToken cancellationToken);
+}
+```
+
+#### `StreamRequestHandler<TResponse>`
+
+Delegate representing the next handler in the streaming pipeline.
+
+```csharp
+public delegate IAsyncEnumerable<TResponse> StreamRequestHandler<out TResponse>();
 ```
 
 #### `IPipelineBehavior<TRequest, TResponse>`
@@ -1005,7 +1304,9 @@ public static IServiceCollection AddMediator(
 **Registration Details:**
 - Registers `IMediator` as **scoped**
 - Registers all `IRequestHandler<,>` implementations as **scoped**
+- Registers all `IStreamRequestHandler<,>` implementations as **scoped**
 - Registers all `IPipelineBehavior<,>` implementations as **scoped**
+- Registers all `IStreamPipelineBehavior<,>` implementations as **scoped**
 - Registers all `INotificationHandler<>` implementations as **scoped**
 - Registers all `INotificationPipelineBehavior<>` implementations as **scoped**
 - Only scans **public**, **non-abstract** classes
@@ -1086,10 +1387,11 @@ public class ValidationBehavior<TRequest, TResponse> : IPipelineBehavior<TReques
 | Feature | AMediator | MediatR |
 |---------|---------------|---------|
 | Request/Response | ✅ | ✅ |
+| Streaming | ✅ | ✅ |
 | Notifications | ✅ | ✅ |
 | Request Pipeline Behaviors | ✅ | ✅ |
+| Stream Pipeline Behaviors | ✅ | ✅ |
 | Notification Pipeline Behaviors | ✅ | ❌ |
-| Streaming | ❌ | ✅ |
 | Pre/Post Request Behaviors | ❌ | ✅ |
 | Dependencies | 1 | 3+ |
 | Package Size | ~10 KB | ~50 KB |
@@ -1100,11 +1402,11 @@ public class ValidationBehavior<TRequest, TResponse> : IPipelineBehavior<TReques
 **Choose AMediator if:**
 - You want a lightweight, focused implementation
 - You need notification pipeline behaviors
+- You need streaming with pipeline behaviors
 - You prefer minimal dependencies
 - You want to understand your mediator implementation
 
 **Choose MediatR if:**
-- You need streaming support (`IStreamRequest`)
 - You need pre/post request processors
 - You're already familiar with MediatR's ecosystem
 - You need a battle-tested library with large community

@@ -2,7 +2,7 @@
 
 ## Overview
 
-This library provides a complete mediator pattern implementation for CQRS-style architectures, supporting both request/response handling and publish/subscribe notifications with extensible pipeline behaviors.
+This library provides a complete mediator pattern implementation for CQRS-style architectures, supporting request/response handling, streaming data, and publish/subscribe notifications with extensible pipeline behaviors.
 
 **Version**: 1.0.0
 **Target Framework**: .NET Standard 2.0
@@ -37,6 +37,19 @@ namespace Mediator
             CancellationToken cancellationToken = default);
 
         /// <summary>
+        /// Sends a streaming request to the appropriate handler and returns an async stream of responses.
+        /// </summary>
+        /// <typeparam name="TResponse">The type of items in the stream.</typeparam>
+        /// <param name="request">The streaming request to send.</param>
+        /// <param name="cancellationToken">A cancellation token that can be used to cancel the stream enumeration.</param>
+        /// <returns>An async stream of responses from the handler.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when request is null.</exception>
+        /// <exception cref="InvalidOperationException">Thrown when no handler is registered for the request type.</exception>
+        IAsyncEnumerable<TResponse> SendStreamAsync<TResponse>(
+            IStreamRequest<TResponse> request,
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
         /// Publishes a notification to all registered handlers.
         /// </summary>
         /// <typeparam name="TNotification">The notification type.</typeparam>
@@ -55,6 +68,7 @@ namespace Mediator
 
 **Behavior**:
 - `SendAsync`: Routes the request to exactly one handler. Throws `InvalidOperationException` if no handler is registered.
+- `SendStreamAsync`: Routes the streaming request to exactly one handler and returns an async stream. Throws `InvalidOperationException` if no handler is registered. The stream supports cancellation via the provided cancellation token.
 - `Publish`: Invokes all registered handlers for the notification type in parallel using `Task.WhenAll`. If multiple handlers throw exceptions, they are aggregated into an `AggregateException`.
 
 ---
@@ -121,6 +135,115 @@ namespace Mediator
 ```
 
 **Service Lifetime**: Registered as **scoped** by default.
+
+---
+
+### Streaming Interfaces
+
+#### `IStreamRequest<TResponse>`
+
+Marker interface for streaming requests that return an async stream of responses.
+
+```csharp
+namespace Mediator
+{
+    /// <summary>
+    /// Marker interface for streaming requests.
+    /// </summary>
+    /// <typeparam name="TResponse">The type of items in the stream.</typeparam>
+    public interface IStreamRequest<out TResponse> { }
+}
+```
+
+**Usage**: Implement this interface on request types that need to return multiple items over time via streaming.
+
+**Use Cases**:
+- Large dataset processing (pagination, bulk data export)
+- Real-time data feeds (stock prices, sensor data, live updates)
+- Progressive data loading (infinite scroll, chunked processing)
+- Server-sent events or push notifications
+
+#### `IStreamRequestHandler<TRequest, TResponse>`
+
+Handler for processing streaming requests.
+
+```csharp
+namespace Mediator
+{
+    /// <summary>
+    /// Defines a handler for a streaming request.
+    /// </summary>
+    /// <typeparam name="TRequest">The streaming request type.</typeparam>
+    /// <typeparam name="TResponse">The type of items in the stream.</typeparam>
+    public interface IStreamRequestHandler<in TRequest, out TResponse>
+        where TRequest : IStreamRequest<TResponse>
+    {
+        /// <summary>
+        /// Handles the streaming request asynchronously.
+        /// </summary>
+        /// <param name="request">The request to handle.</param>
+        /// <param name="cancellationToken">A cancellation token.</param>
+        /// <returns>An async stream of responses.</returns>
+        IAsyncEnumerable<TResponse> HandleAsync(TRequest request, CancellationToken cancellationToken);
+    }
+}
+```
+
+**Service Lifetime**: Registered as **scoped** by default.
+**Implementation Note**: Use `[EnumeratorCancellation]` attribute on the cancellation token parameter for proper async enumerable cancellation support.
+
+---
+
+### Streaming Pipeline Behavior Interfaces
+
+#### `IStreamPipelineBehavior<TRequest, TResponse>`
+
+Pipeline behavior for cross-cutting concerns on streaming requests.
+
+```csharp
+namespace Mediator
+{
+    /// <summary>
+    /// Delegate representing the next handler in the streaming pipeline.
+    /// </summary>
+    /// <typeparam name="TResponse">The type of items in the stream.</typeparam>
+    /// <returns>An async stream of responses.</returns>
+    public delegate IAsyncEnumerable<TResponse> StreamRequestHandler<out TResponse>();
+
+    /// <summary>
+    /// Defines a behavior that wraps streaming request handlers.
+    /// Behaviors execute in reverse registration order (last registered executes first).
+    /// </summary>
+    /// <typeparam name="TRequest">The streaming request type.</typeparam>
+    /// <typeparam name="TResponse">The type of items in the stream.</typeparam>
+    public interface IStreamPipelineBehavior<in TRequest, TResponse>
+        where TRequest : IStreamRequest<TResponse>
+    {
+        /// <summary>
+        /// Handles the streaming request, optionally transforming the stream or short-circuiting.
+        /// </summary>
+        /// <param name="request">The request being handled.</param>
+        /// <param name="nextHandler">The next handler in the pipeline.</param>
+        /// <param name="cancellationToken">A cancellation token.</param>
+        /// <returns>An async stream of responses.</returns>
+        IAsyncEnumerable<TResponse> HandleAsync(
+            TRequest request,
+            StreamRequestHandler<TResponse> nextHandler,
+            CancellationToken cancellationToken);
+    }
+}
+```
+
+**Service Lifetime**: Registered as **scoped** by default.
+**Execution Order**: Behaviors execute in **reverse registration order** (last registered executes first).
+**Short-Circuiting**: Behaviors can skip calling `nextHandler()` to short-circuit the pipeline (e.g., cached streams).
+**Stream Operations**: Behaviors can:
+- Transform stream items (mapping, filtering, enrichment)
+- Buffer or batch stream items
+- Add logging or metrics for stream consumption
+- Implement caching or memoization
+- Handle errors and retry logic
+- Apply rate limiting or throttling
 
 ---
 
@@ -340,8 +463,10 @@ namespace Mediator
 - Registers `IMediator` as **scoped**
 - Scans all provided assemblies for:
   - `IRequestHandler<,>` implementations → registered as **scoped**
+  - `IStreamRequestHandler<,>` implementations → registered as **scoped**
   - `INotificationHandler<>` implementations → registered as **scoped**
   - `IPipelineBehavior<,>` implementations → registered as **scoped**
+  - `IStreamPipelineBehavior<,>` implementations → registered as **scoped**
   - `INotificationPipelineBehavior<>` implementations → registered as **scoped**
 - Only scans **public**, **non-abstract**, **non-generic type definitions** classes
 
@@ -432,6 +557,152 @@ public class DeleteUserCommandHandler : IRequestHandler<DeleteUserCommand, Unit>
 
 // Usage
 await mediator.SendAsync(new DeleteUserCommand(userId), cancellationToken);
+```
+
+---
+
+### Streaming Pattern
+
+#### Streaming Query Example
+
+```csharp
+using Mediator;
+using System.Runtime.CompilerServices;
+
+// Define streaming request
+public record GetProductStreamQuery(int CategoryId) : IStreamRequest<ProductDto>;
+
+public record ProductDto(int Id, string Name, decimal Price);
+
+// Define handler
+public class GetProductStreamQueryHandler : IStreamRequestHandler<GetProductStreamQuery, ProductDto>
+{
+    private readonly IProductRepository _repository;
+
+    public GetProductStreamQueryHandler(IProductRepository repository) => _repository = repository;
+
+    public async IAsyncEnumerable<ProductDto> HandleAsync(
+        GetProductStreamQuery request,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var page = 0;
+        while (true)
+        {
+            var products = await _repository.GetPageAsync(request.CategoryId, page++, 100, cancellationToken);
+            if (!products.Any()) break;
+
+            foreach (var product in products)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return new ProductDto(product.Id, product.Name, product.Price);
+            }
+        }
+    }
+}
+
+// Usage - consume stream
+await foreach (var product in mediator.SendStreamAsync(
+    new GetProductStreamQuery(categoryId),
+    cancellationToken))
+{
+    Console.WriteLine($"{product.Name}: ${product.Price}");
+}
+```
+
+#### Real-time Streaming Example
+
+```csharp
+// Define streaming request for live data
+public record GetLiveStockPricesQuery(string Symbol) : IStreamRequest<StockPrice>;
+
+public record StockPrice(string Symbol, decimal Price, DateTime Timestamp);
+
+// Define handler
+public class GetLiveStockPricesQueryHandler : IStreamRequestHandler<GetLiveStockPricesQuery, StockPrice>
+{
+    private readonly IStockPriceService _service;
+
+    public GetLiveStockPricesQueryHandler(IStockPriceService service) => _service = service;
+
+    public async IAsyncEnumerable<StockPrice> HandleAsync(
+        GetLiveStockPricesQuery request,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        // Stream live updates until cancelled
+        await foreach (var price in _service.SubscribeToPrices(request.Symbol, cancellationToken))
+        {
+            yield return new StockPrice(request.Symbol, price.Value, DateTime.UtcNow);
+        }
+    }
+}
+
+// Usage with cancellation
+var cts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+
+await foreach (var price in mediator.SendStreamAsync(
+    new GetLiveStockPricesQuery("AAPL"),
+    cts.Token))
+{
+    Console.WriteLine($"{price.Symbol}: ${price.Price} at {price.Timestamp}");
+}
+```
+
+#### Stream Pipeline Behavior Example
+
+```csharp
+// Logging behavior for streams
+public class StreamLoggingBehavior<TRequest, TResponse> : IStreamPipelineBehavior<TRequest, TResponse>
+    where TRequest : IStreamRequest<TResponse>
+{
+    private readonly ILogger<StreamLoggingBehavior<TRequest, TResponse>> _logger;
+
+    public StreamLoggingBehavior(ILogger<StreamLoggingBehavior<TRequest, TResponse>> logger)
+    {
+        _logger = logger;
+    }
+
+    public async IAsyncEnumerable<TResponse> HandleAsync(
+        TRequest request,
+        StreamRequestHandler<TResponse> nextHandler,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var requestName = typeof(TRequest).Name;
+        _logger.LogInformation("Starting stream: {RequestName}", requestName);
+
+        var count = 0;
+        await foreach (var item in nextHandler().WithCancellation(cancellationToken))
+        {
+            count++;
+            yield return item;
+        }
+
+        _logger.LogInformation("Completed stream: {RequestName}, Items: {Count}", requestName, count);
+    }
+}
+
+// Transform behavior for streams
+public class StreamTransformBehavior<TRequest, TResponse> : IStreamPipelineBehavior<TRequest, TResponse>
+    where TRequest : IStreamRequest<TResponse>
+{
+    public async IAsyncEnumerable<TResponse> HandleAsync(
+        TRequest request,
+        StreamRequestHandler<TResponse> nextHandler,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await foreach (var item in nextHandler().WithCancellation(cancellationToken))
+        {
+            // Transform or filter each item
+            var transformed = TransformItem(item);
+            if (ShouldInclude(transformed))
+            {
+                yield return transformed;
+            }
+        }
+    }
+
+    private TResponse TransformItem(TResponse item) => item; // Custom transformation
+    private bool ShouldInclude(TResponse item) => true; // Custom filtering
+}
 ```
 
 ---

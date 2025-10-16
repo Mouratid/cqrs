@@ -1,11 +1,12 @@
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Mediator
 {
-
+    [SuppressMessage("Naming", "CA1724:Type names should not match namespaces", Justification = "Intentional name for clarity")]
     public static class DependencyInjection
     {
         /// <summary>
@@ -25,6 +26,16 @@ namespace Mediator
             // Register mediator as scoped to align with typical handler lifetime
             services.AddScoped<IMediator, Mediator>();
 
+            services
+                .AddRequestResponses()
+                .AddNotifications()
+                .AddStreaming();
+
+            return services;
+        }
+
+        private static IServiceCollection AddRequestResponses(this IServiceCollection services, params Assembly[] assemblies)
+        {
             // Scan for handlers
             var handlerTypes = assemblies
                 .SelectMany(a => a.GetTypes())
@@ -53,6 +64,11 @@ namespace Mediator
                 services.AddScoped(behavior.Interface, behavior.Implementation);
             }
 
+            return services;
+        }
+
+        private static IServiceCollection AddNotifications(this IServiceCollection services, params Assembly[] assemblies)
+        {
             // Scan for notification handlers
             var notificationHandlerTypes = assemblies
                 .SelectMany(a => a.GetTypes())
@@ -83,5 +99,39 @@ namespace Mediator
 
             return services;
         }
+
+        private static IServiceCollection AddStreaming(this IServiceCollection services, params Assembly[] assemblies)
+        {
+            // Scan for stream request handlers
+            var streamHandlerTypes = assemblies
+                .SelectMany(a => a.GetTypes())
+                .Where(t => t.IsClass && !t.IsAbstract && !t.IsGenericTypeDefinition && !t.IsValueType && t.IsPublic)
+                .SelectMany(t => t.GetInterfaces()
+                    .Where(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IStreamRequestHandler<,>))
+                    .Select(i => new { Interface = i, Implementation = t }))
+                .ToList();
+
+            foreach (var streamHandler in streamHandlerTypes)
+            {
+                services.AddScoped(streamHandler.Interface, streamHandler.Implementation);
+            }
+
+            // Scan for stream pipeline behaviors
+            var streamBehaviorTypes = assemblies
+                .SelectMany(a => a.GetTypes())
+                .Where(t => t.IsClass && !t.IsAbstract && !t.IsGenericTypeDefinition && !t.IsValueType && t.IsPublic)
+                .SelectMany(t => t.GetInterfaces()
+                    .Where(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IStreamPipelineBehavior<,>))
+                    .Select(i => new { Interface = i, Implementation = t }))
+                .ToList();
+
+            foreach (var streamBehavior in streamBehaviorTypes)
+            {
+                services.AddScoped(streamBehavior.Interface, streamBehavior.Implementation);
+            }
+
+            return services;
+        }
+
     }
 }
