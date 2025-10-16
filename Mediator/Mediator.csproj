@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
       
     <PackageId>AMediator</PackageId>
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
     <Authors>Alexandros Mouratidis</Authors>
     <Company>Alexandros Mouratidis</Company>
       
@@ -28,6 +28,11 @@
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
 
     <PackageReleaseNotes>
+        Version 1.0.1:
+        - Added streaming support for requests with IAsyncEnumerable responses
+        - Enables real-time data streaming through the mediator pipeline
+
+        Version 1.0.0:
         - Initial release of AMediator
         - Provides request/response, notification, and pipeline behavior patterns
         - Compatible with .NET Standard 2.0 and higher
